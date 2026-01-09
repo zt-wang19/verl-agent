@@ -33,7 +33,7 @@ if __name__ == '__main__':
     print(f"processing data for mode: {args.mode}")
     args.local_dir = os.path.join(args.local_dir, args.mode)
 
-    data_source = 'hiyouga/geometry3k'
+    data_source = '/mnt/shared-storage-gpfs2/sfteval/lsz/spid/models/geometry3k'
     """
     **NOTE**: This is a frequently asked question.
     We do NOT use the data in 'hiyouga/geometry3k', instead we only use it to indicate the modality and the data size.

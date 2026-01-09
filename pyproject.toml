@@ -85,3 +85,14 @@ verl = [
   "version/*",
   "trainer/config/*.yaml"
 ]
+
+[tool.uv]
+index-url = "http://mirrors.i.h.pjlab.org.cn/pypi/simple/"
+
+[[tool.uv.index]]
+url = "http://mirrors.i.h.pjlab.org.cn/pypi/simple/"
+default = true
+ 
+[tool.uv.pip]
+index-url = "http://mirrors.i.h.pjlab.org.cn/pypi/simple/"
+

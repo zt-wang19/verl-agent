@@ -23,3 +23,5 @@ packaging>=20.0
 uvicorn
 fastapi
 qwen-vl-utils[decord]
+swanlab
+swanlab[dashboard]

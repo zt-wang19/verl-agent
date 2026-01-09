@@ -19,3 +19,6 @@ from .sokoban import *
 from .gym_cards import *
 from .appworld import *
 from .search import *
+from .scienceworld import *
+from .textworld_express import *
+from .jericho import *

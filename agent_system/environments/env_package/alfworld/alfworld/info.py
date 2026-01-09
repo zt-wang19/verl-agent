@@ -8,6 +8,8 @@ from alfworld.utils import mkdirs
 
 _default_alfworld_cache = os.path.expanduser("~/.cache/alfworld")
 ALFWORLD_DATA = mkdirs(os.getenv("ALFWORLD_DATA", _default_alfworld_cache))
+
+print(f'ALFWORLD_DATA:--{ALFWORLD_DATA}')
 os.environ["ALFWORLD_DATA"] = ALFWORLD_DATA  # Set the environment variable, in case it wasn't.
 
 BUILTIN_DATA_PATH = pjoin(os.path.dirname(__file__), "data")

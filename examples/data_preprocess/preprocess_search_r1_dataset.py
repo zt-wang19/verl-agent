@@ -16,6 +16,7 @@
 import argparse
 import logging
 import os
+# os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 import tempfile
 
 import pandas as pd

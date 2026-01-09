@@ -516,6 +516,376 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
                 success['webshop_task_score (not success_rate)'].append(score_value)
                 return
 
+class ScienceWorldEnvironmentManager(EnvironmentManagerBase):
+    """
+    EnvironmentManager for ScienceWorld.
+    """
+    def __init__(self, envs, projection_f, config):
+        self.memory = SimpleMemory()
+        super().__init__(envs, projection_f, config)
+    
+    def reset(self, kwargs):
+        text_obs, infos = self.envs.reset()
+        
+        # Initialize the history buffer
+        self.memory.reset(batch_size=len(text_obs))
+        self.tasks = [info.get('task_description', '') for info in infos]
+        self.pre_text_obs = text_obs
+        
+        # Get initial look and inventory
+        full_text_obs = self.build_text_obs(text_obs, infos, init=True)
+        return {'text': full_text_obs, 'image': None, 'anchor': text_obs}, infos
+    
+    def step(self, text_actions):
+        actions, valids = self.projection_f(text_actions, self.envs.get_valid_actions)
+        text_obs, rewards, dones, infos = self.envs.step(actions)
+        
+        self.memory.store({'text_obs': self.pre_text_obs, 'action': actions})
+        self.pre_text_obs = text_obs
+        
+        full_text_obs = self.build_text_obs(text_obs, infos)
+        
+        # Add action_valid to infos
+        for i, info in enumerate(infos):
+            info['is_action_valid'] = to_numpy(valids[i])
+        
+        next_observations = {'text': full_text_obs, 'image': None, 'anchor': text_obs}
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+        
+        return next_observations, rewards, dones, infos
+    
+    def build_text_obs(self, text_obs, infos, init=False):
+        """
+        Build the text observation for the agent.
+        """
+        postprocess_text_obs = []
+        
+        if not init and self.config.env.history_length > 0:
+            memory_contexts, valid_lens = self.memory.fetch(
+                self.config.env.history_length,
+                obs_key="text_obs",
+                action_key="action"
+            )
+        
+        for i in range(len(text_obs)):
+            # Get available actions - format them nicely
+            valid_actions = infos[i].get('valid', [])[:20]  # Limit to 20 actions to avoid too long prompts
+            reformatted_actions = ", ".join(f"'{a}'" for a in valid_actions)
+            
+            # Get inventory
+            inventory = infos[i].get('inv', 'empty')
+            
+            if init or self.config.env.history_length <= 0:
+                obs = SCIENCEWORLD_TEMPLATE_NO_HIS.format(
+                    task_description=self.tasks[i],
+                    current_observation=text_obs[i],
+                    inventory=inventory,
+                    available_actions=reformatted_actions
+                )
+            else:
+                obs = SCIENCEWORLD_TEMPLATE.format(
+                    task_description=self.tasks[i],
+                    step_count=len(self.memory[i]),
+                    history_length=valid_lens[i],
+                    action_history=memory_contexts[i],
+                    current_step=len(self.memory[i]) + 1,
+                    current_observation=text_obs[i],
+                    inventory=inventory,
+                    available_actions=reformatted_actions
+                )
+            
+            postprocess_text_obs.append(obs)
+        
+        return postprocess_text_obs
+    
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+        # Find the last entry with active masks
+        for i in reversed(range(len(total_batch_list[batch_idx]))):
+            batch_item = total_batch_list[batch_idx][i]
+            if batch_item['active_masks']:
+                info = total_infos[batch_idx][i]
+                # ScienceWorld uses score (0-100) to determine success
+                score = info.get('score', 0)
+                won_value = float(score >= 100)
+                success['success_rate'].append(won_value)
+                
+                # Also track normalized score
+                success['scienceworld_score'].append(score / 100.0)
+                
+                # Track by task name if available
+                task_name = info.get('taskName', 'unknown')
+                success[f"{task_name}_success_rate"].append(won_value)
+                return
+
+
+class TextWorldExpressEnvironmentManager(EnvironmentManagerBase):
+    """
+    EnvironmentManager for TextWorldExpress.
+    Supports multiple game types: cookingworld, coin, twc, mapreader, arithmetic, sorting, simonsays, peckingorder.
+    """
+    def __init__(self, envs, projection_f, config):
+        self.memory = SimpleMemory()
+        super().__init__(envs, projection_f, config)
+    
+    def reset(self, kwargs):
+        text_obs, infos = self.envs.reset()
+        
+        # Initialize the history buffer
+        self.memory.reset(batch_size=len(text_obs))
+        self.tasks = [info.get('task_description', '') for info in infos]
+        self.game_names = [info.get('game_name', 'unknown') for info in infos]
+        self.pre_text_obs = text_obs
+        
+        # Get initial observations
+        full_text_obs = self.build_text_obs(text_obs, infos, init=True)
+        return {'text': full_text_obs, 'image': None, 'anchor': text_obs}, infos
+    
+    def step(self, text_actions):
+        actions, valids = self.projection_f(text_actions, self.envs.get_valid_actions)
+        text_obs, rewards, dones, infos = self.envs.step(actions)
+        
+        self.memory.store({'text_obs': self.pre_text_obs, 'action': actions})
+        self.pre_text_obs = text_obs
+        
+        full_text_obs = self.build_text_obs(text_obs, infos)
+        
+        # Add action_valid to infos
+        for i, info in enumerate(infos):
+            info['is_action_valid'] = to_numpy(valids[i])
+        
+        next_observations = {'text': full_text_obs, 'image': None, 'anchor': text_obs}
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+        
+        return next_observations, rewards, dones, infos
+    
+    def build_text_obs(self, text_obs, infos, init=False):
+        """
+        Build the text observation for the agent.
+        """
+        postprocess_text_obs = []
+        
+        if not init and self.config.env.history_length > 0:
+            memory_contexts, valid_lens = self.memory.fetch(
+                self.config.env.history_length,
+                obs_key="text_obs",
+                action_key="action"
+            )
+        
+        for i in range(len(text_obs)):
+            # Get available actions - format them nicely
+            valid_actions = infos[i].get('valid', [])[:20]  # Limit to 20 actions to avoid too long prompts
+            reformatted_actions = ", ".join(f"'{a}'" for a in valid_actions)
+            
+            if init or self.config.env.history_length <= 0:
+                obs = TEXTWORLD_EXPRESS_TEMPLATE_NO_HIS.format(
+                    game_name=self.game_names[i],
+                    task_description=self.tasks[i],
+                    current_observation=text_obs[i],
+                    available_actions=reformatted_actions
+                )
+            else:
+                obs = TEXTWORLD_EXPRESS_TEMPLATE.format(
+                    game_name=self.game_names[i],
+                    task_description=self.tasks[i],
+                    step_count=len(self.memory[i]),
+                    history_length=valid_lens[i],
+                    action_history=memory_contexts[i],
+                    current_step=len(self.memory[i]) + 1,
+                    current_observation=text_obs[i],
+                    available_actions=reformatted_actions
+                )
+            
+            postprocess_text_obs.append(obs)
+        
+        return postprocess_text_obs
+    
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+        # Find the last entry with active masks
+        for i in reversed(range(len(total_batch_list[batch_idx]))):
+            batch_item = total_batch_list[batch_idx][i]
+            if batch_item['active_masks']:
+                info = total_infos[batch_idx][i]
+                # TextWorldExpress uses tasksuccess to determine success
+                won_value = float(info.get('won', False))
+                success['success_rate'].append(won_value)
+                
+                # Also track normalized score
+                score = info.get('score', 0)
+                success['textworld_express_score'].append(score)
+                
+                # Track by game name if available
+                game_name = info.get('game_name', 'unknown')
+                success[f"{game_name}_success_rate"].append(won_value)
+                return
+
+
+class JerichoEnvironmentManager(EnvironmentManagerBase):
+    """
+    EnvironmentManager for Jericho (Interactive Fiction games).
+    Supports classic text adventure games like Zork, Enchanter, etc.
+    """
+    def __init__(self, envs, projection_f, config):
+        self.memory = SimpleMemory()
+        self._step_count = 0
+        self._total_env_time = 0.0
+        self._total_projection_time = 0.0
+        self._total_build_obs_time = 0.0
+        super().__init__(envs, projection_f, config)
+    
+    def reset(self, kwargs):
+        import time
+        t0 = time.time()
+        print(f"[TIMING] JerichoEnvironmentManager.reset: Starting...")
+        
+        t_env_start = time.time()
+        text_obs, infos = self.envs.reset()
+        t_env_end = time.time()
+        print(f"[TIMING] JerichoEnvironmentManager.reset: envs.reset() took {t_env_end - t_env_start:.2f}s")
+        
+        # Initialize the history buffer
+        self.memory.reset(batch_size=len(text_obs))
+        self.tasks = [info.get('task_description', '') for info in infos]
+        self.game_names = [info.get('game_name', 'unknown') for info in infos]
+        self.pre_text_obs = text_obs
+        
+        # Get initial observations
+        t_build_start = time.time()
+        full_text_obs = self.build_text_obs(text_obs, infos, init=True)
+        t_build_end = time.time()
+        print(f"[TIMING] JerichoEnvironmentManager.reset: build_text_obs() took {t_build_end - t_build_start:.2f}s")
+        
+        t_total = time.time() - t0
+        print(f"[TIMING] JerichoEnvironmentManager.reset: Total {t_total:.2f}s, games={list(set(self.game_names))}")
+        return {'text': full_text_obs, 'image': None, 'anchor': text_obs}, infos
+    
+    def step(self, text_actions):
+        import time
+        t0 = time.time()
+        self._step_count += 1
+        
+        # Projection
+        t_proj_start = time.time()
+        actions, valids = self.projection_f(text_actions, self.envs.get_valid_actions)
+        t_proj_end = time.time()
+        proj_time = t_proj_end - t_proj_start
+        self._total_projection_time += proj_time
+        
+        # Environment step
+        t_env_start = time.time()
+        text_obs, rewards, dones, infos = self.envs.step(actions)
+        t_env_end = time.time()
+        env_time = t_env_end - t_env_start
+        self._total_env_time += env_time
+        
+        self.memory.store({'text_obs': self.pre_text_obs, 'action': actions})
+        self.pre_text_obs = text_obs
+        
+        # Build observations
+        t_build_start = time.time()
+        full_text_obs = self.build_text_obs(text_obs, infos)
+        t_build_end = time.time()
+        build_time = t_build_end - t_build_start
+        self._total_build_obs_time += build_time
+        
+        # Add action_valid to infos
+        for i, info in enumerate(infos):
+            info['is_action_valid'] = to_numpy(valids[i])
+        
+        next_observations = {'text': full_text_obs, 'image': None, 'anchor': text_obs}
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+        
+        t_total = time.time() - t0
+        
+        # Print timing every step
+        print(f"[TIMING] JerichoEnvironmentManager.step #{self._step_count}: "
+              f"total={t_total:.2f}s (proj={proj_time:.2f}s, env={env_time:.2f}s, build={build_time:.2f}s) | "
+              f"Avg: proj={self._total_projection_time/self._step_count:.2f}s, "
+              f"env={self._total_env_time/self._step_count:.2f}s, "
+              f"build={self._total_build_obs_time/self._step_count:.2f}s")
+        
+        return next_observations, rewards, dones, infos
+    
+    def build_text_obs(self, text_obs, infos, init=False):
+        """
+        Build the text observation for the agent.
+        """
+        postprocess_text_obs = []
+        
+        if not init and self.config.env.history_length > 0:
+            memory_contexts, valid_lens = self.memory.fetch(
+                self.config.env.history_length,
+                obs_key="text_obs",
+                action_key="action"
+            )
+        
+        for i in range(len(text_obs)):
+            # Get available actions - format them nicely
+            valid_actions = infos[i].get('valid', [])[:20]  # Limit to 20 actions to avoid too long prompts
+            reformatted_actions = ", ".join(f"'{a}'" for a in valid_actions)
+            
+            # Get inventory and score
+            inventory = infos[i].get('inv', 'empty')
+            score = infos[i].get('score', 0)
+            max_score = infos[i].get('max_score', 100)
+            
+            if init or self.config.env.history_length <= 0:
+                obs = JERICHO_TEMPLATE_NO_HIS.format(
+                    game_name=self.game_names[i],
+                    task_description=self.tasks[i],
+                    current_observation=text_obs[i],
+                    inventory=inventory,
+                    score=score,
+                    max_score=max_score,
+                    available_actions=reformatted_actions
+                )
+            else:
+                obs = JERICHO_TEMPLATE.format(
+                    game_name=self.game_names[i],
+                    task_description=self.tasks[i],
+                    step_count=len(self.memory[i]),
+                    history_length=valid_lens[i],
+                    action_history=memory_contexts[i],
+                    current_step=len(self.memory[i]) + 1,
+                    current_observation=text_obs[i],
+                    inventory=inventory,
+                    score=score,
+                    max_score=max_score,
+                    available_actions=reformatted_actions
+                )
+            
+            postprocess_text_obs.append(obs)
+        
+        return postprocess_text_obs
+    
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+        # Find the last entry with active masks
+        for i in reversed(range(len(total_batch_list[batch_idx]))):
+            batch_item = total_batch_list[batch_idx][i]
+            if batch_item['active_masks']:
+                info = total_infos[batch_idx][i]
+                # Jericho uses victory to determine success
+                won_value = float(info.get('won', False))
+                success['success_rate'].append(won_value)
+                
+                # Also track normalized score
+                score = info.get('score', 0)
+                max_score = info.get('max_score', 100)
+                if max_score > 0:
+                    normalized_score = score / max_score
+                else:
+                    normalized_score = 0.0
+                success['jericho_normalized_score'].append(normalized_score)
+                
+                # Track by game name if available
+                game_name = info.get('game_name', 'unknown')
+                success[f"{game_name}_success_rate"].append(won_value)
+                success[f"{game_name}_normalized_score"].append(normalized_score)
+                return
+
+
 class AppWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
@@ -693,6 +1063,105 @@ def make_envs(config):
         projection_f = partial(appworld_projection)
         envs = AppWorldEnvironmentManager(_envs, projection_f, config)
         val_envs = AppWorldEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "scienceworld" in config.env.env_name.lower():
+        from agent_system.environments.env_package.scienceworld import build_scienceworld_envs, scienceworld_projection
+        
+        # Get ScienceWorld specific config
+        task_name = config.env.scienceworld.task_name
+        simplification_str = getattr(config.env.scienceworld, 'simplification_str', 'easy')
+        env_step_limit = getattr(config.env.scienceworld, 'env_step_limit', 100)
+        
+        _envs = build_scienceworld_envs(
+            task_name=task_name,
+            seed=config.env.seed,
+            env_num=config.data.train_batch_size,
+            group_n=group_n,
+            resources_per_worker=resources_per_worker,
+            is_train=True,
+            simplification_str=simplification_str,
+            env_step_limit=env_step_limit
+        )
+        _val_envs = build_scienceworld_envs(
+            task_name=task_name,
+            seed=config.env.seed + 1000,
+            env_num=config.data.val_batch_size,
+            group_n=1,
+            resources_per_worker=resources_per_worker,
+            is_train=False,
+            simplification_str=simplification_str,
+            env_step_limit=env_step_limit
+        )
+        
+        projection_f = partial(scienceworld_projection)
+        envs = ScienceWorldEnvironmentManager(_envs, projection_f, config)
+        val_envs = ScienceWorldEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "textworld_express" in config.env.env_name.lower():
+        from agent_system.environments.env_package.textworld_express import build_textworld_express_envs, textworld_express_projection
+        
+        # Get TextWorldExpress specific config
+        game_name = getattr(config.env.textworld_express, 'game_name', 'cookingworld')
+        env_step_limit = getattr(config.env.textworld_express, 'env_step_limit', 50)
+        game_params = getattr(config.env.textworld_express, 'game_params', '')
+        
+        _envs = build_textworld_express_envs(
+            game_name=game_name,
+            seed=config.env.seed,
+            env_num=config.data.train_batch_size,
+            group_n=group_n,
+            resources_per_worker=resources_per_worker,
+            is_train=True,
+            env_step_limit=env_step_limit,
+            game_params=game_params
+        )
+        _val_envs = build_textworld_express_envs(
+            game_name=game_name,
+            seed=config.env.seed + 1000,
+            env_num=config.data.val_batch_size,
+            group_n=1,
+            resources_per_worker=resources_per_worker,
+            is_train=False,
+            env_step_limit=env_step_limit,
+            game_params=game_params
+        )
+        
+        projection_f = partial(textworld_express_projection)
+        envs = TextWorldExpressEnvironmentManager(_envs, projection_f, config)
+        val_envs = TextWorldExpressEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "jericho" in config.env.env_name.lower():
+        from agent_system.environments.env_package.jericho import build_jericho_envs, jericho_projection
+        
+        # Get Jericho specific config
+        game_name = getattr(config.env.jericho, 'game_name', 'zork1')
+        rom_path = getattr(config.env.jericho, 'rom_path', '')
+        env_step_limit = getattr(config.env.jericho, 'env_step_limit', 100)
+        
+        _envs = build_jericho_envs(
+            game_name=game_name,
+            rom_path=rom_path,
+            seed=config.env.seed,
+            env_num=config.data.train_batch_size,
+            group_n=group_n,
+            resources_per_worker=resources_per_worker,
+            is_train=True,
+            env_step_limit=env_step_limit
+        )
+        _val_envs = build_jericho_envs(
+            game_name=game_name,
+            rom_path=rom_path,
+            seed=config.env.seed + 1000,
+            env_num=config.data.val_batch_size,
+            group_n=1,
+            resources_per_worker=resources_per_worker,
+            is_train=False,
+            env_step_limit=env_step_limit
+        )
+        
+        projection_f = partial(jericho_projection)
+        envs = JerichoEnvironmentManager(_envs, projection_f, config)
+        val_envs = JerichoEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
     else:
         print("Environment not supported")
